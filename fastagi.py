@@ -56,6 +56,8 @@ class FastAGIServer(threading.Thread):
         self._fagi_server.register_script_handler(
             re.compile('omni-retrieve-conf'), self.omni_retrieve_conf)
         self._fagi_server.register_script_handler(
+            re.compile('omni-retrieve-value'), self.omni_retrieve_value)
+        self._fagi_server.register_script_handler(
             re.compile('omni-blacklist'), self.omni_blacklist)
         self._fagi_server.register_script_handler(
             re.compile('omni-agent-status'), self.omni_agent_status)
@@ -241,6 +243,71 @@ class FastAGIServer(threading.Thread):
         except redis.exceptions.RedisError as e:
             root_logger.error(
                 "Error executing Redis command HGETALL for %s: %s", family_key, e)
+        except Exception as e:
+            root_logger.error("Unable to set variable in channel due to %s", e)
+            raise e
+
+    def omni_retrieve_value(self, agi, *args, **kwargs):
+        """
+        Recupera un campo específico de un hash en Redis y lo establece como variable de canal.
+        
+        Esta función es similar a omni_retrieve_conf, pero solo recupera un campo específico
+        del hash en lugar de todo el hash.
+        
+        Args:
+            agi: Objeto AGI para interactuar con Asterisk
+            args: Argumentos pasados desde el dialplan
+                  Formato 1 (2 argumentos): hash_field, item_id
+                    - hash_field: nombre del campo del hash a recuperar (ej: 'AMD')
+                    - item_id: id de la campaña (ej: ${OMLCAMPID})
+                    - family_type se asume como 'CAMP' por defecto
+                    Ejemplo: AGI(agi://.../omni-retrieve-value,AMD,${OMLCAMPID})
+                  
+                  Formato 2 (3 argumentos): family_type, item_id, hash_field
+                    - family_type: tipo de familia (ej: 'CAMP', 'AMD')
+                    - item_id: id del item (ej: ${OMLCAMPID})
+                    - hash_field: nombre del campo del hash a recuperar (ej: 'AMD')
+                    Ejemplo: AGI(agi://.../omni-retrieve-value,CAMP,${OMLCAMPID},AMD)
+        """
+        arguments = args[0]
+
+        if len(arguments) < 2:
+            root_logger.error("Error: Insufficient arguments provided. Expected: hash_field, item_id or family_type, item_id, hash_field")
+            return
+
+        # Determinar el formato basado en el número de argumentos
+        if len(arguments) == 2:
+            # Formato 1: hash_field, item_id (family_type = 'CAMP' por defecto)
+            hash_field, item_id = arguments[:2]
+            family_type = 'CAMP'
+        else:
+            # Formato 2: family_type, item_id, hash_field
+            family_type, item_id, hash_field = arguments[:3]
+
+        family_key = f'OML:{family_type}:{item_id}'
+
+        redis_connection = self.get_redis_connection(db=0)
+
+        try:
+            # Obtener solo el campo específico del hash usando HGET
+            value = redis_connection.hget(family_key, hash_field)
+            
+            if value is None:
+                root_logger.error(
+                    "Unable to get field '%s' from hash '%s'", hash_field, family_key)
+                return
+
+            # Establecer la variable de canal siguiendo el mismo patrón que omni_retrieve_conf
+            # Para el formato con CAMP, la variable será __OMLCAMP{hash_field}
+            variable_name = f'__OML{family_type}{hash_field}'
+            agi.execute(pystrix.agi.core.SetVariable(variable_name, value))
+            root_logger.debug(
+                "Set variable %s = %s from hash %s field %s",
+                variable_name, value, family_key, hash_field)
+        except redis.exceptions.RedisError as e:
+            root_logger.error(
+                "Error executing Redis command HGET for %s field %s: %s",
+                family_key, hash_field, e)
         except Exception as e:
             root_logger.error("Unable to set variable in channel due to %s", e)
             raise e
