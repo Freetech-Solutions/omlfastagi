@@ -3,7 +3,7 @@ FROM python:3.10-alpine as build
 WORKDIR /app
 
 COPY requirements.txt /app/
-RUN pip install -r ./requirements.txt
+RUN apk add git && pip install -r ./requirements.txt
 
 FROM python:3.10-alpine as run
 

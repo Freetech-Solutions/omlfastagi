@@ -13,6 +13,7 @@ from psycopg2 import sql
 import json
 import requests
 import urllib3
+import gearman
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -562,6 +563,8 @@ class FastAGIServer(threading.Thread):
             "id_campaign": 7,
             "phone_number": "123456789"
         }
+        También envía un evento EXIT_AMD a Gearman para cerrar la llamada
+        en la tabla reportes_app_llamada_resumen.
         """
 
         # 1. Leer CallerIDName
@@ -591,7 +594,54 @@ class FastAGIServer(threading.Thread):
             idCamp, idContact, telContact
         )
 
-        # 3. Leer base y asegurar esquema HTTPS
+        # 3. Obtener callid y uniqueid del canal
+        callid = None
+        uniqueid = None
+        try:
+            res_callid = agi.execute(pystrix.agi.core.GetFullVariable('${CHANNEL(callid)}'))
+            callid = res_callid.get('value') if isinstance(res_callid, dict) else res_callid
+            if callid:
+                callid = callid.strip()
+        except Exception as e:
+            root_logger.warning("Error obteniendo callid: %s", e)
+
+        try:
+            res_uniqueid = agi.execute(pystrix.agi.core.GetFullVariable('${UNIQUEID}'))
+            uniqueid = res_uniqueid.get('value') if isinstance(res_uniqueid, dict) else res_uniqueid
+            if uniqueid:
+                uniqueid = uniqueid.strip()
+        except Exception as e:
+            root_logger.warning("Error obteniendo uniqueid: %s", e)
+
+        # 4. Enviar evento EXIT_AMD a Gearman
+        try:
+            servers_env = os.getenv("GEARMAN_JOB_SERVERS", "gearman:4730")
+            gearman_servers = servers_env.split(",")
+            gm_client = gearman.GearmanClient(gearman_servers)
+
+            # Construir payload para Gearman
+            timestamp_iso = datetime.datetime.now(pytz.UTC).isoformat()
+            gearman_payload = {
+                'event': 'EXIT_AMD',
+                'callid': callid,
+                'uniqueid': uniqueid,
+                'campana_id': int(idCamp),
+                'contacto_id': int(idContact),
+                'numero_marcado': telContact,
+                'tipo_llamada': 5,  # dialer según TIPO_LLAMADA_MAPPING
+                'tipo_campana': 2,  # dialer según TIPO_CAMPANA_MAPPING
+                'time': timestamp_iso
+            }
+
+            # Enviar mensaje a Gearman (no bloqueante)
+            json_payload = json.dumps(gearman_payload, default=str)
+            gm_client.submit_job("acd-log-processor", bytes(json_payload, 'utf-8'), background=True)
+            root_logger.info("Evento EXIT_AMD enviado a Gearman: %s", json_payload)
+        except Exception as e:
+            root_logger.error("Error enviando evento EXIT_AMD a Gearman: %s", e)
+            # No interrumpir el flujo si Gearman falla
+
+        # 5. Leer base y asegurar esquema HTTPS
         base = os.getenv('DIALER_AMD_ENDPOINT', '').strip()
         if not base:
             root_logger.error("DIALER_AMD_ENDPOINT no está definido")
@@ -600,18 +650,18 @@ class FastAGIServer(threading.Thread):
         if not base.startswith(('http://', 'https://')):
             base = 'http://' + base
 
-        # 4. Construir URL final (sin el idContact ahora)
+        # 6. Construir URL final (sin el idContact ahora)
         url = base.rstrip('/') + "/add_amd_event"
         root_logger.debug("POST URL construida: %s", url)
 
-        # 5. Payload con nuevos nombres
+        # 7. Payload con nuevos nombres
         payload = {
             "id_contact": int(idContact),
             "id_campaign": int(idCamp),
             "phone_number": telContact
         }
 
-        # 6. Envío POST
+        # 8. Envío POST (mantener para compatibilidad)
         try:
             resp = requests.post(
                 url,

@@ -16,3 +16,6 @@ pytz==2022.6
 # Peticiones HTTP
 requests==2.31.0
 urllib3==1.26.12
+
+# Cliente Gearman
+git+https://github.com/alejandrozf/python-gearman.git@azf-fix-python-3.12.8#egg=gearman3
