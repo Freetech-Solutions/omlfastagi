@@ -53,15 +53,9 @@ class FastAGIServer(threading.Thread):
         self._fagi_server.register_script_handler(
             re.compile('channel-variables'), self.channel_variables)
         self._fagi_server.register_script_handler(
-            re.compile('omni-logger-conf'), self.omni_logger_conf)
-        self._fagi_server.register_script_handler(
             re.compile('omni-retrieve-conf'), self.omni_retrieve_conf)
         self._fagi_server.register_script_handler(
             re.compile('omni-retrieve-value'), self.omni_retrieve_value)
-        self._fagi_server.register_script_handler(
-            re.compile('omni-blacklist'), self.omni_blacklist)
-        self._fagi_server.register_script_handler(
-            re.compile('omni-agent-status'), self.omni_agent_status)
         self._fagi_server.register_script_handler(
             re.compile('omni-survey-answer'), self.omni_survey_answer)
         self._fagi_server.register_script_handler(
@@ -120,65 +114,6 @@ class FastAGIServer(threading.Thread):
             port=int(os.getenv('REDIS_PORT', 6379)),
             db=db,
             decode_responses=True)
-
-    def omni_logger_conf(self, agi, *args, **kwargs):
-        arguments = args[0]
-
-        if len(arguments) < 14:
-            root_logger.error(
-                'Error: No se proporcionaron suficientes argumentos')
-            return
-
-        campana_id, callid, agente_id, event, numero_marcado, contacto_id, \
-            tipo_llamada, tipo_campana, bridge_wait_time, duracion_llamada, \
-            archivo_grabacion, agente_extra_id, campana_extra_id, numero_extra = arguments
-
-        # ---- Event logging in PGSQL reportes_app_llamadalog ----
-        llamadalog_dict = {
-            'time': self.get_date(),
-            'callid': callid,
-            'campana_id': campana_id,
-            'tipo_campana': tipo_campana,
-            'tipo_llamada': tipo_llamada,
-            'agente_id': agente_id,
-            'event': event,
-            'numero_marcado': numero_marcado,
-            'contacto_id': contacto_id,
-            'bridge_wait_time': bridge_wait_time,
-            'duracion_llamada': duracion_llamada,
-            'archivo_grabacion': archivo_grabacion,
-            'agente_extra_id': agente_extra_id,
-            'campana_extra_id': campana_extra_id,
-            'numero_extra': numero_extra
-        }
-
-        try:
-            with psycopg2.connect(
-                    host=os.getenv('PGHOST'),
-                    port=os.getenv('PGPORT'),
-                    dbname=os.getenv('PGDATABASE'),
-                    user=os.getenv('PGUSER'),
-                    password=os.getenv('PGPASSWORD')) as conn:
-                with conn.cursor() as cursor:
-                    insert_query = sql.SQL(
-                        'INSERT INTO reportes_app_llamadalog ({}) VALUES ({})'
-                    ).format(
-                        sql.SQL(',').join(
-                            map(sql.Identifier, llamadalog_dict.keys())),
-                        sql.SQL(',').join(
-                            map(sql.Placeholder, llamadalog_dict.keys()))
-                    )
-                    cursor.execute(insert_query, llamadalog_dict)
-                    conn.commit()
-        except Exception as e:
-            root_logger.error('Error inserting data into DB: %s', e)
-
-        # ---- OML CALLDATA Redis logging ----
-        self._record_camp_calldata_event(campana_id, tipo_llamada, event)
-        self._record_attended_call_wait_time(campana_id, agente_id, bridge_wait_time, event)
-
-        # Todavia sin uso:
-        # self._record_agent_calldata_event(agente_id, tipo_llamada, event)
 
     def _notify_calldata_event(self, event_data):
         try:
@@ -312,69 +247,6 @@ class FastAGIServer(threading.Thread):
         except Exception as e:
             root_logger.error("Unable to set variable in channel due to %s", e)
             raise e
-
-    def omni_blacklist(self, agi, *args, **kwargs):
-        if len(args[0]) < 1:
-            root_logger.error("Error: No phone number provided")
-            return
-
-        phone_number = args[0][0]
-        black_list_key = 'OML:BLACKLIST'
-
-        try:
-            redis_connection = self.get_redis_connection()
-            is_black_listed = int(
-                redis_connection.sismember(black_list_key, phone_number))
-        except redis.exceptions.RedisError as e:
-            root_logger.error(
-                "Error executing Redis command SISMEMBER: %s", e)
-            is_black_listed = -1
-
-        try:
-            agi.execute(pystrix.agi.core.SetVariable(
-                'BLACKLIST', str(is_black_listed)))
-        except Exception as e:
-            root_logger.error(
-                "Unable to set variable BLACKLIST in channel due to %s", e)
-            raise e
-
-    def omni_agent_status(self, agi, *args, **kwargs):
-        arguments = args[0]
-        if len(arguments) < 2:
-            root_logger.error("Error: Insufficient arguments provided")
-            return
-
-        command, agent_id = arguments[:2]
-        agent_key = f'OML:AGENT:{agent_id}'
-
-        redis_connection = self.get_redis_connection()
-
-        if command not in ['GET', 'SET']:
-            root_logger.error("Unknown command %s", command)
-            return
-
-        try:
-            if command == 'GET':
-                agent_data = redis_connection.hgetall(agent_key)
-                if not agent_data:
-                    root_logger.error(
-                        "Unable to get Agent DATA for %s", agent_key)
-                    return
-
-                for var_name, var_value in agent_data.items():
-                    agi_variable = f'__OMLAGENT{var_name.upper()}'
-                    agi.execute(pystrix.agi.core.SetVariable(
-                        agi_variable, var_value))
-            elif command == 'SET':
-                data = {
-                    'STATUS': arguments[2],
-                    'TIMESTAMP': arguments[3],
-                    'CAMPAIGN': arguments[4] if len(arguments) >= 5 else '',
-                    'CONTACT_NUMBER': arguments[5] if len(arguments) >= 6 else '',
-                }
-                redis_connection.hset(agent_key, mapping=data)
-        except redis.exceptions.RedisError as e:
-            root_logger.error("Error executing Redis command: %s", e)
 
     def omni_survey_answer(self, agi, *args, **kwargs):
         if not args or len(args[0]) != 9:
