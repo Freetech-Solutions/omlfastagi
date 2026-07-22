@@ -1,31 +1,201 @@
-stages:
-  - build
+include:
+  - template: Security/SAST.gitlab-ci.yml
+    rules:
+      - if: '$FULL == "true"'
+  - project: 'omnileads/devsecops'
+    ref: 'main'
+    file:
+      - 'templates/security-scans.yml'
+      - 'templates/gitleaks.yml'
+      - 'templates/owasp-dependency-check.yml'
+      - 'templates/sonarqube.yml'
 
-container-image-dev:
+variables:
+  IMAGE_NAME: "fastagi"
+  # Valores válidos: omnileads | freetechsolutions. Vacío = según rama (main → omnileads).
+  DOCKER_ORG: ""
+  FULL: ""
+  BUILD: ""
+  # SKIP_OWASP=true → omite owasp_dependency_scan y owasp_defectdojo_upload (útil con FULL=true).
+  SKIP_OWASP: ""
+  PYTHON_VERSION: "3.10"
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_DRIVER: overlay2
+  TRIVY_SEVERITY: "CRITICAL"
+  # DefectDojo: nombre del Product (Asset) en DefectDojo.
+  # Para la estrategia "1 Repo = 1 Producto", mantén vacía la variable DEFECTDOJO_ENGAGEMENT_ID en GitLab
+  # y este script creará/resolverá el producto y el engagement "Continuous Security" automáticamente.
+  DEFECTDOJO_PRODUCT_NAME: "OMniFastAGI"
+  OWASP_PROJECT_NAME: "OMniFastAGI"
+  # Clave del proyecto en SonarQube (debe existir o se crea en el primer análisis).
+  # Alineado con sonar-project.properties.
+  SONAR_PROJECT_KEY: "omnileads-fastagi"
+  SONAR_PROJECT_NAME: "OMniLeads FastAGI"
+  SONAR_SOURCES: "."
+  # DefectDojo con certificado interno/auto-firmado (override en CI/CD si usan CA pública).
+  DEFECTDOJO_INSECURE: "true"
+  # Sin variables → sonarqube, build, security_scan y security_report (+ gitleaks/owasp en security).
+  # BUILD=true → solo build (container-image).
+  # FULL=true → pipeline completo: tests, SAST, gitleaks, owasp, sonarqube, build y escaneos de seguridad.
+  # FULL=true + SKIP_OWASP=true → igual que FULL, sin OWASP.
+
+stages:
+  - security
+  - test
+  - sonarqube
+  - build
+  - security_scan
+  - security_report
+
+.full-pipeline-rules: &full-pipeline-rules
+  rules:
+    - if: '$FULL == "true" && $CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master-3.0" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop-3.0")'
+    - if: '$FULL == "true" && $CI_PIPELINE_SOURCE == "web"'
+
+.sonar-rules: &sonar-rules
+  rules:
+    - if: '$FULL == "true" && $CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master-3.0" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop-3.0")'
+    - if: '$FULL == "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$FULL != "true" && $BUILD != "true" && $CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master-3.0" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop-3.0")'
+    - if: '$FULL != "true" && $BUILD != "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$FULL != "true" && $BUILD != "true" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master-3.0" || $CI_COMMIT_BRANCH == "develop-3.0")'
+
+.build-rules: &build-rules
+  rules:
+    - if: '$BUILD == "true" && $FULL != "true"'
+    - if: '$FULL == "true" && $CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master-3.0" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop-3.0")'
+    - if: '$FULL == "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$FULL == "true" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master-3.0" || $CI_COMMIT_BRANCH == "develop-3.0")'
+    - if: '$FULL != "true" && $BUILD != "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$FULL != "true" && $BUILD != "true" && $CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$FULL != "true" && $BUILD != "true" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master-3.0" || $CI_COMMIT_BRANCH == "develop-3.0")'
+
+# Las reglas de Trivy se heredan por defecto de la plantilla central
+
+.gitleaks-rules: &gitleaks-rules
+  rules:
+    - if: '$BUILD == "true" && $FULL != "true"'
+      when: never
+    - if: '$FULL == "true" && $CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master-3.0" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop-3.0")'
+    - if: '$FULL == "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$FULL == "true" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master-3.0" || $CI_COMMIT_BRANCH == "develop-3.0")'
+    - if: '$FULL != "true" && $BUILD != "true" && $CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master-3.0" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop-3.0")'
+    - if: '$FULL != "true" && $BUILD != "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$FULL != "true" && $BUILD != "true" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master-3.0" || $CI_COMMIT_BRANCH == "develop-3.0")'
+
+.owasp-rules: &owasp-rules
+  rules:
+    - if: '$SKIP_OWASP == "true"'
+      when: never
+    - if: '$BUILD == "true" && $FULL != "true"'
+      when: never
+    - if: '$FULL == "true" && $CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master-3.0" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop-3.0")'
+    - if: '$FULL == "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$FULL == "true" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master-3.0" || $CI_COMMIT_BRANCH == "develop-3.0")'
+    - if: '$FULL != "true" && $BUILD != "true" && $CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master-3.0" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop-3.0")'
+    - if: '$FULL != "true" && $BUILD != "true" && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$FULL != "true" && $BUILD != "true" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master-3.0" || $CI_COMMIT_BRANCH == "develop-3.0")'
+
+test:flake8:
+  image: python:${PYTHON_VERSION}-slim
+  stage: test
+  before_script:
+    - pip install --no-cache-dir --upgrade pip
+    - pip install --no-cache-dir flake8
+  script:
+    - echo "Ejecutando flake8 en el código Python..."
+    - flake8 --config=.flake8 fastagi.py --statistics --count
+  <<: *full-pipeline-rules
+  allow_failure: false
+
+# Job SonarQube centralizado en omnileads/devsecops (templates/sonarqube.yml).
+sonarqube_scan:
+  stage: sonarqube
+  needs:
+    - job: test:flake8
+      optional: true
+  <<: *sonar-rules
+
+sonarqube_defectdojo_upload:
+  <<: *sonar-rules
+
+.build_template:
+  image: docker:24.0.9-alpine3.19
   services:
-    - docker:20.10.15-dind-alpine3.15
-  image: docker:20.10.15-alpine3.15
-  stage: build
+    - docker:24.0.9-dind-alpine3.19
   before_script:
     - apk add --no-cache docker-cli-buildx
   script:
-    - >-
-      docker buildx build
-      --file=Dockerfile
-      --tag=run
-      --target=run
-      .
+    - echo "Building ${IMAGE_NAME}..."
+    - ls -l ${DOCKERFILE_PATH}
+    - docker buildx build --file=${DOCKERFILE_PATH} --tag=${IMAGE_NAME} --target=run --load ${BUILD_CONTEXT}
+    - docker save ${IMAGE_NAME} -o ${CI_PROJECT_DIR}/${IMAGE_NAME}.tar
     - |-
-      if [ "${CI_COMMIT_BRANCH}" == "main" ]; then
-        echo "${DOCKER_SECRET}" | docker login --username "${DOCKER_USERNAME}" --password-stdin
-        IMAGE_VERSION="$(date +%Y%m%d)-${CI_COMMIT_SHORT_SHA}"
-        docker tag run omnileads/fastagi:$IMAGE_VERSION
-        docker push docker.io/omnileads/fastagi:$IMAGE_VERSION
+      if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+        echo "Pipeline de Merge Request: omitiendo login y push a Docker Hub."
+      elif [ -z "${DOCKER_PASSWORD:-}" ] && [ -z "${DOCKER_SECRET:-}" ]; then
+        echo "Credenciales de Docker no configuradas: omitiendo login y push."
       else
-        echo "${DOCKER_PASSWORD}" | docker login --username "${DOCKER_USER}" --password-stdin
-        IMAGE_VERSION="$(date +%Y%m%d)-${CI_COMMIT_SHORT_SHA}"
-        docker tag run freetechsolutions/fastagi:$IMAGE_VERSION
-        docker push docker.io/freetechsolutions/fastagi:$IMAGE_VERSION
-      fi  
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "web"'
+        echo "Pushing image ${IMAGE_NAME}..."
+
+        if [ -n "${DOCKER_ORG}" ]; then
+          if [[ "${DOCKER_ORG}" != "omnileads" && "${DOCKER_ORG}" != "freetechsolutions" ]]; then
+            echo "Error: DOCKER_ORG debe ser 'omnileads' o 'freetechsolutions'."
+            exit 1
+          fi
+          PUSH_ORG="${DOCKER_ORG}"
+        elif [[ "${CI_COMMIT_BRANCH}" == "main" ]]; then
+          PUSH_ORG="omnileads"
+        else
+          PUSH_ORG="freetechsolutions"
+        fi
+
+        if [[ "${PUSH_ORG}" == "omnileads" ]]; then
+          if [ -z "${DOCKER_SECRET:-}" ] || [ -z "${DOCKER_USERNAME:-}" ]; then
+            echo "Faltan credenciales para org omnileads: omitiendo push."
+          else
+            echo "${DOCKER_SECRET}" | docker login --username "${DOCKER_USERNAME}" --password-stdin
+            IMAGE_VERSION="$(date +%Y%m%d)-${CI_COMMIT_SHORT_SHA}"
+            docker tag ${IMAGE_NAME} docker.io/${PUSH_ORG}/${IMAGE_NAME}:$IMAGE_VERSION
+            docker push docker.io/${PUSH_ORG}/${IMAGE_NAME}:$IMAGE_VERSION
+          fi
+        else
+          if [ -z "${DOCKER_PASSWORD:-}" ] || [ -z "${DOCKER_USER:-}" ]; then
+            echo "Faltan credenciales para org freetechsolutions: omitiendo push."
+          else
+            echo "${DOCKER_PASSWORD}" | docker login --username "${DOCKER_USER}" --password-stdin
+            IMAGE_VERSION="$(date +%Y%m%d)-${CI_COMMIT_SHORT_SHA}"
+            docker tag ${IMAGE_NAME} docker.io/${PUSH_ORG}/${IMAGE_NAME}:$IMAGE_VERSION
+            docker push docker.io/${PUSH_ORG}/${IMAGE_NAME}:$IMAGE_VERSION
+          fi
+        fi
+      fi
+  <<: *build-rules
+
+container-image:
+  extends: .build_template
+  stage: build
+  variables:
+    IMAGE_NAME: fastagi
+    DOCKERFILE_PATH: Dockerfile
+    BUILD_CONTEXT: .
+  artifacts:
+    paths:
+      - fastagi.tar
+    expire_in: 90 days
+
+# Los jobs trivy_scan, trivy_defectdojo_upload, gitleaks_defectdojo_upload y sonarqube_defectdojo_upload se heredan de devsecops.
+
+# GitLab no expande ${GITLEAKS_STAGE} del template incluido en el campo stage.
+gitleaks_scan:
+  stage: security
+  <<: *gitleaks-rules
+
+# GitLab no expande ${OWASP_SCAN_STAGE} del template incluido en el campo stage.
+owasp_dependency_scan:
+  stage: security
+  <<: *owasp-rules
+
+owasp_defectdojo_upload:
+  <<: *owasp-rules

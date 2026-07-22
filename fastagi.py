@@ -38,7 +38,6 @@ CALLDATA_WAIT_KEY = 'OML:CALLDATA:WAIT-TIME:CAMP:{0}'
 CALLEVENTS_CHANNEL = 'OML:CHANNEL:CALLEVENTS'
 
 
-
 class FastAGIServer(threading.Thread):
     def __init__(self):
         super().__init__()
@@ -186,10 +185,10 @@ class FastAGIServer(threading.Thread):
     def omni_retrieve_value(self, agi, *args, **kwargs):
         """
         Recupera un campo específico de un hash en Redis y lo establece como variable de canal.
-        
+
         Esta función es similar a omni_retrieve_conf, pero solo recupera un campo específico
         del hash en lugar de todo el hash.
-        
+
         Args:
             agi: Objeto AGI para interactuar con Asterisk
             args: Argumentos pasados desde el dialplan
@@ -198,7 +197,7 @@ class FastAGIServer(threading.Thread):
                     - item_id: id de la campaña (ej: ${OMLCAMPID})
                     - family_type se asume como 'CAMP' por defecto
                     Ejemplo: AGI(agi://.../omni-retrieve-value,AMD,${OMLCAMPID})
-                  
+
                   Formato 2 (3 argumentos): family_type, item_id, hash_field
                     - family_type: tipo de familia (ej: 'CAMP', 'AMD')
                     - item_id: id del item (ej: ${OMLCAMPID})
@@ -208,7 +207,9 @@ class FastAGIServer(threading.Thread):
         arguments = args[0]
 
         if len(arguments) < 2:
-            root_logger.error("Error: Insufficient arguments provided. Expected: hash_field, item_id or family_type, item_id, hash_field")
+            root_logger.error(
+                "Error: Insufficient arguments provided. Expected: "
+                "hash_field, item_id or family_type, item_id, hash_field")
             return
 
         # Determinar el formato basado en el número de argumentos
@@ -227,7 +228,7 @@ class FastAGIServer(threading.Thread):
         try:
             # Obtener solo el campo específico del hash usando HGET
             value = redis_connection.hget(family_key, hash_field)
-            
+
             if value is None:
                 root_logger.error(
                     "Unable to get field '%s' from hash '%s'", hash_field, family_key)
@@ -278,10 +279,10 @@ class FastAGIServer(threading.Thread):
                 with conn.cursor() as cursor:
                     insert_query = sql.SQL(
                         'INSERT INTO survey_app_respuestadepreguntadeencuesta ({}) VALUES ({})'
-                        ).format(
-                            sql.SQL(',').join(map(sql.Identifier, respuesta_dict.keys())),
-                            sql.SQL(',').join(map(sql.Placeholder, respuesta_dict.keys()))
-                            )
+                    ).format(
+                        sql.SQL(',').join(map(sql.Identifier, respuesta_dict.keys())),
+                        sql.SQL(',').join(map(sql.Placeholder, respuesta_dict.keys()))
+                    )
                     cursor.execute(insert_query, respuesta_dict)
                     conn.commit()
         except Exception as e:
@@ -343,10 +344,10 @@ class FastAGIServer(threading.Thread):
         if len(arguments) < 2:
             root_logger.error("Error: Insufficient arguments provided")
             return
-            
+
         command, conference_id = arguments[:2]
         conference_key = f'OML:CONFERENCE:{conference_id}'
-    
+
         redis_connection = self.get_redis_connection()
 
         if command not in ['SET']:
@@ -378,7 +379,7 @@ class FastAGIServer(threading.Thread):
         for i, value in enumerate(multinum_array):
             # Crear la variable EXTEN_i (EXTEN_0, EXTEN_1, etc.)
             variable_name = f'EXTEN_{i}'
-            agi.execute(pystrix.agi.core.SetVariable(variable_name, value))            
+            agi.execute(pystrix.agi.core.SetVariable(variable_name, value))
 
         # Crear la variable MULTINUM_COUNT con la cantidad de elementos
         multinum_count = len(multinum_array)
@@ -387,7 +388,7 @@ class FastAGIServer(threading.Thread):
     def omni_notify_multinum_answer(self, agi, *args, **kwargs):
         """
         Notifica a OmniLeads el numero de tel de la llamada multinumero que fue atendida.
-        
+
         Args:
             agi: Objeto AGI para interactuar con Asterisk
             args: Argumentos pasados desde el dialplan (agent_id, phone)
@@ -396,10 +397,10 @@ class FastAGIServer(threading.Thread):
         try:
             # Obtener la URL base del entorno
             base_url = os.environ.get('OMNILEADS_HOSTNAME', 'localhost')
-            
+
             # Construir la URL completa
             url = f'https://{base_url}/api/v1/asterisk/notify_attended_multinum_call/'
-            
+
             # Extraer correctamente los argumentos
             arguments = args[0]
             if len(arguments) < 2:
