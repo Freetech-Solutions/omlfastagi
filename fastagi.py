@@ -8,6 +8,7 @@ import logging
 import pystrix
 import threading
 import redis
+from redis.maint_notifications import MaintNotificationsConfig
 import psycopg2
 from psycopg2 import sql
 import json
@@ -36,6 +37,7 @@ CALLDATA_CAMP_KEY = 'OML:CALLDATA:CAMP:{0}'
 CALLDATA_AGENT_KEY = 'OML:CALLDATA:AGENT:{0}'
 CALLDATA_WAIT_KEY = 'OML:CALLDATA:WAIT-TIME:CAMP:{0}'
 CALLEVENTS_CHANNEL = 'OML:CHANNEL:CALLEVENTS'
+ERR_INSUFFICIENT_ARGS = 'Error: Insufficient arguments provided'
 
 
 class FastAGIServer(threading.Thread):
@@ -108,11 +110,13 @@ class FastAGIServer(threading.Thread):
         return now.strftime(formato)
 
     def get_redis_connection(self, db=0):
+        # OSS Redis no soporta MAINT_NOTIFICATIONS; evita spam DEBUG de redis-py 8.x
         return redis.Redis(
             host=os.getenv('REDIS_HOSTNAME', 'redis'),
             port=int(os.getenv('REDIS_PORT', 6379)),
             db=db,
-            decode_responses=True)
+            decode_responses=True,
+            maint_notifications_config=MaintNotificationsConfig(enabled=False))
 
     def _notify_calldata_event(self, event_data):
         try:
@@ -157,7 +161,7 @@ class FastAGIServer(threading.Thread):
         arguments = args[0]
 
         if len(arguments) < 2:
-            root_logger.error("Error: Insufficient arguments provided")
+            root_logger.error(ERR_INSUFFICIENT_ARGS)
             return
 
         family_type, item_id = arguments[:2]
@@ -290,7 +294,7 @@ class FastAGIServer(threading.Thread):
 
     def set_asterisk_channel_variables_from_api(self, agi, *args, **kwargs):
         if len(args) < 2:  # Revisar que hay al menos dos argumentos
-            root_logger.error("Error: Insufficient arguments provided")
+            root_logger.error(ERR_INSUFFICIENT_ARGS)
             return
 
         # Verificar si los argumentos son tuplas, y extraer los valores si es necesario
@@ -342,7 +346,7 @@ class FastAGIServer(threading.Thread):
     def omni_conference_ids(self, agi, *args, **kwargs):
         arguments = args[0]
         if len(arguments) < 2:
-            root_logger.error("Error: Insufficient arguments provided")
+            root_logger.error(ERR_INSUFFICIENT_ARGS)
             return
 
         command, conference_id = arguments[:2]
@@ -542,13 +546,13 @@ class FastAGIServer(threading.Thread):
                 timeout=5,
                 verify=False
             )
-            if resp.ok:
-                root_logger.info("POST correcto a %s → %s", url, payload)
-            else:
+            if not resp.ok:
                 root_logger.error(
                     "POST a %s falló: %s – %s",
                     url, resp.status_code, resp.text
                 )
+                return
+            root_logger.info("POST correcto a %s → %s", url, payload)
         except Exception as e:
             root_logger.error("Error haciendo POST a %s: %s", url, e)
 
