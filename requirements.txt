@@ -2,20 +2,24 @@
 # Módulos estándar de Python (os, re, sys, time, datetime, threading, json, logging) no se incluyen
 
 # FastAGI para Asterisk
-pystrix==1.1.8
+pystrix==1.3.0
 
 # Base de datos PostgreSQL
-psycopg2-binary==2.9.6
+psycopg2-binary==2.9.13
 
 # Cliente Redis
-redis==5.0.0
+redis==8.1.0
 
 # Zonas horarias
-pytz==2022.6
+pytz==2026.3.post1
 
 # Peticiones HTTP
-requests==2.31.0
-urllib3==1.26.12
+requests==2.34.2
+urllib3==2.7.0
+
+# --- PARCHES DE SEGURIDAD PARA DEPENDENCIAS TRANSITIVAS ---
+# Forzamos una versión segura de jaraco.context para resolver el CVE-2026-23949
+jaraco.context>=6.0.0
 
 # Cliente Gearman
 git+https://github.com/alejandrozf/python-gearman.git@azf-fix-python-3.12.8#egg=gearman3
