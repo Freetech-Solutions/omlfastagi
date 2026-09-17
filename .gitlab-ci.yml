@@ -32,7 +32,7 @@ variables:
   # Alineado con sonar-project.properties.
   SONAR_PROJECT_KEY: "omnileads-fastagi"
   SONAR_PROJECT_NAME: "OMniLeads FastAGI"
-  SONAR_SOURCES: "."
+  SONAR_SOURCES: "fastagi.py"
   # DefectDojo con certificado interno/auto-firmado (override en CI/CD si usan CA pública).
   DEFECTDOJO_INSECURE: "true"
   # Sin variables → sonarqube, build, security_scan y security_report (+ gitleaks/owasp en security).
